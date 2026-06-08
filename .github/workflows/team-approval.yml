@@ -1,0 +1,45 @@
+name: Require Team Approval
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-approval:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Token
+        id: get_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Verify Team Approvals
+        env:
+          GH_TOKEN: ${{ steps.get_token.outputs.token }}
+        run: |
+          ORG="${{ github.repository_owner }}"
+          TEAM="${{ github.event.repository.name }}"
+          PR="${{ github.event.pull_request.number }}"
+
+          APPROVERS=$(gh api repos/$ORG/$TEAM/pulls/$PR/reviews --jq '.[] | select(.state == "APPROVED") | .user.login' | sort -u)
+
+          if [ -z "$APPROVERS" ]; then
+            exit 1
+          fi
+
+          APPROVED=false
+          for USER in $APPROVERS; do
+            if gh api orgs/$ORG/teams/$TEAM/memberships/$USER > /dev/null 2>&1; then
+              APPROVED=true
+              break
+            fi
+          done
+
+          if [ "$APPROVED" = false ]; then
+            exit 1
+          fi

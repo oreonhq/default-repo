@@ -1,0 +1,59 @@
+name: Verify Team Signature
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  verify-signatures:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Token
+        id: get_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout Target Repo
+        uses: actions/checkout@v4
+        with:
+          path: target-repo
+          fetch-depth: 0
+
+      - name: Checkout Sigs Repo
+        uses: actions/checkout@v4
+        with:
+          repository: oreonhq/team-sigs
+          path: team-sigs
+          token: ${{ steps.get_token.outputs.token }}
+
+      - name: Verify Commits
+        env:
+          GH_TOKEN: ${{ steps.get_token.outputs.token }}
+        run: |
+          cd target-repo
+          COMMITS=$(gh pr view ${{ github.event.pull_request.number }} --json commits --jq '.commits[].oid')
+
+          for COMMIT in $COMMITS; do
+            AUTHOR_LOGIN=$(gh api repos/${{ github.repository }}/commits/$COMMIT --jq '.author.login')
+            AUTHOR_EMAIL=$(git log -1 --format="%ae" $COMMIT)
+
+            if [ -z "$AUTHOR_LOGIN" ] || [ "$AUTHOR_LOGIN" == "null" ]; then
+              exit 1
+            fi
+
+            SIG_FILE="../team-sigs/${AUTHOR_LOGIN}.txt"
+
+            if [ ! -f "$SIG_FILE" ]; then
+              exit 1
+            fi
+
+            echo "$AUTHOR_EMAIL $(cat $SIG_FILE)" > ../allowed_signers
+            git config gpg.ssh.allowedSignersFile ../allowed_signers
+
+            if ! git verify-commit $COMMIT; then
+              exit 1
+            fi
+          done
